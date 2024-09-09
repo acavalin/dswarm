@@ -1,0 +1,339 @@
+#!/usr/bin/env ruby
+%w[ yaml shellwords ].each{|lib| require lib }
+
+class DockerSwarm
+  DEFAULT_CMD_ARGS    = 'bash -il'
+  DEFAULT_DOCKER_ARGS = ''
+  
+  def initialize(argv)
+    @argv      = argv.dup
+    @env       = {}
+    @conf_path = nil
+
+    # autoload environment from `.dockerswarm` YAML config file
+    dir = File.expand_path Dir.pwd
+    loop do
+      conf_path = File.join(dir, '.dockerswarm')
+      env = YAML.unsafe_load_file conf_path rescue nil
+      
+      if env.is_a?(Hash)
+        print "⬢ #{@argv[0] || :help}   "
+        env.each do |k, v|
+          ENV[k] = v
+          print "⬢ #{k.sub 'DOCKER_', ''} #{v}   "
+        end; puts ''
+        @conf_path, @env = conf_path, env
+        break
+      else
+        parent_dir = File.expand_path File.join(dir, '..')
+        break if parent_dir == dir
+        dir = parent_dir
+      end
+    end
+  end # initialize
+  
+  def run
+    case @argv.shift # main action - https://docs.docker.com/reference/cli/docker/
+      # ------------------------------------------------------------------------
+      when 'c', 'context' # https://docs.docker.com/engine/manage-resources/contexts/
+        case @argv[0]
+          when 'ls' then exec "docker context ls"
+          when 'add'
+            die "missing arguments" if @argv.size < 3
+            exec %Q|docker context create #{@argv[1].shellescape} --docker host=ssh://#{@argv[2].shellescape}|
+          when 'rm'
+            die "missing arguments" if @argv.size < 2
+            exec %Q|docker context rm #{@argv[1].shellescape}|
+          else
+            die "no subcommand given"
+        end
+      # ------------------------------------------------------------------------
+      when 'ssh'
+        die "DOCKER_CONTEXT env undefined" unless ENV['DOCKER_CONTEXT']
+        
+        user_host = `docker context inspect --format '{{.Endpoints.docker.Host}}' #{ENV['DOCKER_CONTEXT']}`.strip.sub('ssh://', '')
+        cmd = @argv.map{|i| i.shellescape }.join(' ')
+        
+        exec "ssh #{user_host} #{cmd}"
+      # ------------------------------------------------------------------------
+      when 'ls'
+        exec "docker stack ls"
+      # ------------------------------------------------------------------------
+      when 's', 'services'
+        if @argv.include?('-f') || @argv.include?('--full')
+          show_full = true
+          @argv.delete '--full'
+          @argv.delete '-f'
+        end
+
+        if show_full
+          list = `docker service ls`.split("\n")
+          puts list.shift
+        else
+          list = `docker service ls --format '{{.Name}}'`.split("\n").sort
+        end
+        list.select!{|i| i.include? "#{stack_name}_" } if stack_name
+        puts list
+      # ------------------------------------------------------------------------
+      when 'i', 'inspect'
+        is_pretty = @argv.include?('-p') || @argv.include?('--pretty')
+        exec "docker service inspect #{service_name} #{'--pretty' if is_pretty}"
+      # ------------------------------------------------------------------------
+      when 'l', 'logs'
+        is_follow = @argv.include?('-f') || @argv.include?('--follow')
+        exec "docker service logs #{service_name} #{'-f' if is_follow}"
+      # ------------------------------------------------------------------------
+      when 'r', 'restart'
+        exec "docker service update --force #{service_name}"
+      # ------------------------------------------------------------------------
+      when 't', 'top'
+        id = container_id
+        exec "docker top #{id}" if id
+      # ------------------------------------------------------------------------
+      when 'e', 'exec'
+        if id = container_id
+          @argv.shift # discard service name
+
+          cmd_args, docker_args = split_args
+          exec "docker exec -ti #{docker_args} #{id} #{cmd_args}"
+        end
+      # ------------------------------------------------------------------------
+      when 'run'
+        image = image_name @argv.shift
+        cmd_args, docker_args = split_args
+        tmp_name = "#{File.basename __FILE__}_#{rand(1_000_000).to_s.rjust 6, '0'}"
+        exec "docker run --rm -ti --name #{tmp_name} --entrypoint '' #{docker_args} #{image} #{cmd_args}"
+      # ------------------------------------------------------------------------
+      when 'rm'
+        if @argv.include?('-f') || @argv.include?('--force')
+          is_forced = true
+          @argv.delete '-f'
+          @argv.delete '--force'
+        end
+      
+        die "missing stack name" unless stack_name
+        
+        unless is_forced
+          print "Remove `#{stack_name}`? [y|N] "
+          exit if STDIN.gets.strip != 'y'
+        end
+        
+        exec "docker stack rm #{stack_name}"
+      # ------------------------------------------------------------------------
+      when 'ps'
+        if @argv.include?('-u') || @argv.include?('--usage')
+          show_usage = true
+          @argv.delete '-u'
+          @argv.delete '--usage'
+        end
+        
+        die "missing stack name" unless stack_name
+        
+        output = []
+
+        print '.'
+        lines = `docker stack ps #{stack_name}`.split("\n")
+        output << "===== Running ======"
+        output << lines.grep(/Running|^ID/).join("\n")
+
+        lines = lines.grep_v(/Running|^ID/)
+        if lines.size > 0
+          output << ''
+          output << "===== NOT running =="
+          output << lines.join("\n")
+        end
+        
+        print '.'
+        output << ''
+        output << "===== Containers ==="
+        output << `docker container ls --filter label=com.docker.stack.namespace=#{stack_name}`.
+          split("\n").grep(/#{stack_name}|^CONTAINER ID/).join("\n")
+
+        if show_usage
+          print '.'
+          output << ''
+          output << "===== MEM/CPU ======"
+          lines = `docker stats --all --no-stream --format "table {{.Name}}\t{{.MemUsage}}\t{{.CPUPerc}}"`.
+            gsub(/(\.\d)\.([^ \t]+)/){|match| "#{$1} #{$2}" }.
+            split("\n").grep_v(/0B \/ 0B\s+0.00%/).grep_v(/-- \/ --/)
+          output << lines.shift
+          output << lines.sort.join("\n")
+        end
+        
+        output = output.join "\n"
+        
+        if ENV['DOCKER_REGISTRY']
+          output.gsub! ENV['DOCKER_REGISTRY'], ''
+          output.gsub! /IMAGE#{' ' * ENV['DOCKER_REGISTRY'].size}( *)(COMMAND|NODE)/, 'IMAGE\1\2'
+        end
+        
+        max_length = output.split("\n").map{|l| l.strip.size }.max
+        output.gsub! /^(=====.{15})/, "\\1#{'='*(max_length - 20)}"
+
+        print "\r"
+        puts output
+      # ------------------------------------------------------------------------
+      when 'lsi', 'images'
+        lines = `docker image ls`.split("\n")
+        puts lines.shift
+        puts ENV['DOCKER_REGISTRY'] \
+          ? lines.select{|l| l.include? ENV['DOCKER_REGISTRY'] }
+          : lines
+      # ------------------------------------------------------------------------
+      when 'b', 'build'
+        name, tag = @argv[0].to_s.split(':')
+        tag ||= :latest
+        folder = @argv[1] || name
+        
+        Dir.chdir(folder) do
+          hook_present = File.exist?('dswarm-build.hook')
+          system "dswarm-build.hook pre " if hook_present
+          system "docker build -t #{image_name name}:#{tag} ."
+          system "dswarm-build.hook post" if hook_present
+        end
+      # ------------------------------------------------------------------------
+      when 'P', 'push'
+        die "DOCKER_REGISTRY env undefined" unless ENV['DOCKER_REGISTRY']
+        die "no image specified" unless name = @argv[0]
+
+        name, tag = name.to_s.split(':')
+        tag ||= :latest
+        name = image_name "#{name}:#{tag}"
+
+        ids  = image_ids_read
+        
+        old_id = ids[name]
+        new_id = `docker image ls --format "{{.ID}}" #{name}`.strip
+
+        if old_id != new_id
+          system "docker login registry.gitlab.com"
+          system "docker image push #{name.shellescape}" if $?.to_i == 0
+          image_ids_update(ids.merge! name => new_id)    if $?.to_i == 0
+        else
+          die "image [#{new_id}] already pushed"
+        end
+      # ------------------------------------------------------------------------
+      when 'p', 'pull'
+        die "DOCKER_REGISTRY env undefined" unless ENV['DOCKER_REGISTRY']
+        
+        system "docker login registry.gitlab.com"
+        
+        if name = @argv[0]
+          name, tag = name.to_s.split(':')
+          tag ||= :latest
+          name = image_name "#{name}:#{tag}"
+          
+          exec "docker image pull #{name.shellescape}"
+        else
+          puts "pulling all previously pushed images..."
+          images_pushed  = image_ids_read
+          images_current = `docker image ls --format "{{.Repository}}:{{.Tag}}|{{.ID}}"`.
+            split("\n").select{|l| l.include? ENV['DOCKER_REGISTRY'] }.
+            inject({}){|h, l| k, v = l.split('|'); h.merge k => v }
+          
+          images_pushed.each do |name, id|
+            next if id != images_current[name]
+            puts "\n===> #{name}"
+            system "docker image pull #{name.shellescape}"
+          end
+        end
+      # ------------------------------------------------------------------------
+      when 'clean'
+        system "docker container prune -f"
+        system "docker image     prune -f"
+        system "docker buildx    prune -f" if @argv.include?('-c') || @argv.include?('--cache')
+      # ------------------------------------------------------------------------
+      when 'd', 'deploy'
+        hook_present = File.exist?('dswarm-deploy.hook')
+        
+        system "dswarm-deploy.hook pre " if hook_present
+        
+        name = stack_name
+        
+        conf_names = [@argv[1], "#{name}.yml", "compose.yml", "docker-compose.yml"].compact
+        conf = conf_names.detect{|f| File.exist? f }
+        die "compose file not found (#{conf_names.join '|'})" unless conf
+
+        system "docker stack deploy --detach=false --with-registry-auth -c #{conf.shellescape} #{name.shellescape}"
+        
+        system "dswarm-deploy.hook post" if hook_present
+      # ------------------------------------------------------------------------
+      else
+        puts <<~TXT
+          USAGE: #{File.basename __FILE__} <action> [params]
+          
+          ### manage stacks & services
+           <d|deploy>       [stack-name] [compose.yml]
+           ls
+           ps               [stack-name] [-u|--usage]
+           rm               [stack-name] [-f|--force]
+           <s|services>     [-f|--full]
+           <i|inspect>      <service-id> [-p|--pretty]
+           <l|logs>         <service-id> [-f|--follow]
+           <r|restart>      <service-id>
+           <t|top>          <service-id>
+           <e|exec>         <service-id> [command [args]] [-- docker-args]
+
+          ### manage images
+           <lsi|images>
+           <b|build>        <image-name>[:tag] [build-folder]
+           <P|push>         <image-name>[:tag]
+           <p|pull>         [<image-name>[:tag]]
+           clean            [-c|--cache]
+           run              <image-id>   [command [args]] [-- docker-args]
+          
+          ### manage contexts
+           <c|context>      ls
+           <c|context>      add <context-name> <ssh-user@address>
+           <c|context>      rm  <context-name>
+           ssh              [remote-command]
+
+          ### .dockerswarm YAML file keys
+           DOCKER_CONTEXT   context name / target machine
+           DOCKER_STACK     stack name   / service-id prefix
+           DOCKER_REGISTRY  images remote base path
+        TXT
+    end # case - main action
+  end # run
+  
+  
+  private # ____________________________________________________________________
+  
+
+  def die(msg, code: 1)
+    puts "ERR: #{msg}"
+    exit code
+  end # die
+  
+  # https://devops.stackexchange.com/questions/12924/how-to-get-the-ids-of-docker-containers-that-belong-to-a-service-given-the-serv/12963#12963
+  # docker ps --format "table {{.Names}}\t{{ .Labels }}"
+  def container_id = `docker ps --filter label=com.docker.swarm.service.name=#{service_name} --format '{{.ID}}'`.split("\n").first
+  
+  def service_name(name=nil) = [ENV['DOCKER_STACK'   ], name || @argv.first].compact.join('_')
+  
+  def image_name(name=nil)   = [ENV['DOCKER_REGISTRY'], name || @argv.first].compact.join('/')
+
+  def stack_name             = @@stack_name ||= (@argv.first || ENV['DOCKER_STACK'])
+
+  def split_args(default_args1: DEFAULT_CMD_ARGS, default_args2: DEFAULT_DOCKER_ARGS)
+    if sep_pos = @argv.index('--')
+      args1 = @argv[0...sep_pos  ].map{|i| i.shellescape }.join(' ')
+      args2 = @argv[(sep_pos+1)..].map{|i| i.shellescape }.join(' ')
+    else
+      args1 = @argv.map{|i| i.shellescape }.join(' ')
+      args2 = []
+    end
+    
+    [args1.size > 0 ? args1 : default_args1,
+     args2.size > 0 ? args2 : default_args2]
+  end # split_args
+
+  def image_ids_read = YAML.unsafe_load_file("#{@conf_path}.image-versions") rescue {}
+
+  def image_ids_update(data) = File.write("#{@conf_path}.image-versions", data.to_yaml)
+end # class DockerSwarm
+
+running_in_script = $0 == __FILE__
+Process.setproctitle "ruby:#{File.basename __FILE__}" # same as: $0 = 'title'
+
+DockerSwarm.new(ARGV).run if running_in_script
