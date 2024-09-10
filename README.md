@@ -60,7 +60,7 @@ The file must be inside the build folder.
 ~~~
 
 Note: Contexts will be created using by default the SSH adapter but you can always
-use `docker context create` to create your own, but keep in mind that the `ssh`
+use `docker context create` to create your own, however keep in mind that the `ssh`
 action will not work when using a different adapter.
 
 ## 3. Examples
@@ -87,7 +87,7 @@ dswarm push myapp
 
 # run some maintenance commands on remote machine
 dswarm ssh mkdir -p /app-data
-dswarm ssh chwon smith:users /app-data
+dswarm ssh chown smith:users /app-data
 
 # deploys the `awesomeapp` stack using `awesomeapp.yml` compose file
 dswarm deploy
