@@ -17,7 +17,7 @@ class DockerSwarm
       env = YAML.unsafe_load_file conf_path rescue nil
       
       if env.is_a?(Hash)
-        print "⬢ #{@argv[0] || :help}   "
+        print "⬡ #{@argv[0] || :help}   "
         env.each do |k, v|
           ENV[k] = v
           print "⬢ #{k.sub 'DOCKER_', ''} #{v}   "
@@ -181,7 +181,7 @@ class DockerSwarm
           : lines
       # ------------------------------------------------------------------------
       when 'b', 'build'
-        name, tag = @argv[0].to_s.split(':')
+        name, tag = @argv[0].to_s.chomp(File::SEPARATOR).split(':')
         tag ||= :latest
         folder = @argv[1] || name
         
@@ -194,24 +194,32 @@ class DockerSwarm
       # ------------------------------------------------------------------------
       when 'P', 'push'
         die "DOCKER_REGISTRY env undefined" unless ENV['DOCKER_REGISTRY']
-        die "no image specified" unless name = @argv[0]
-
-        name, tag = name.to_s.split(':')
-        tag ||= :latest
-        name = image_name "#{name}:#{tag}"
+        die "no image specified" if @argv.size == 0
 
         ids  = image_ids_read
+        logged_in = false
         
-        old_id = ids[name]
-        new_id = `docker image ls --format "{{.ID}}" #{name}`.strip
+        while name = @argv.shift
+          name, tag = name.to_s.chomp(File::SEPARATOR).split(':')
+          tag ||= :latest
+          name = image_name "#{name}:#{tag}"
 
-        if old_id != new_id
-          system "docker login registry.gitlab.com"
-          system "docker image push #{name.shellescape}" if $?.to_i == 0
-          image_ids_update(ids.merge! name => new_id)    if $?.to_i == 0
-        else
-          die "image [#{new_id}] already pushed"
+          old_id = ids[name]
+          new_id = `docker image ls --format "{{.ID}}" #{name}`.strip
+
+          if old_id != new_id
+            unless logged_in
+              system "docker login registry.gitlab.com"
+              logged_in = true
+            end
+            puts ''
+            system "docker image push #{name.shellescape}" if $?.to_i == 0
+            image_ids_update(ids.merge! name => new_id)    if $?.to_i == 0
+          else
+            puts "NOTE: image already pushed - #{new_id} / #{File.basename name}"
+          end
         end
+
       # ------------------------------------------------------------------------
       when 'p', 'pull'
         die "DOCKER_REGISTRY env undefined" unless ENV['DOCKER_REGISTRY']
@@ -219,7 +227,7 @@ class DockerSwarm
         system "docker login registry.gitlab.com"
         
         if name = @argv[0]
-          name, tag = name.to_s.split(':')
+          name, tag = name.to_s.chomp(File::SEPARATOR).split(':')
           tag ||= :latest
           name = image_name "#{name}:#{tag}"
           
@@ -277,7 +285,7 @@ class DockerSwarm
           ### manage images
            <lsi|images>
            <b|build>        <image-name>[:tag] [build-folder]
-           <P|push>         <image-name>[:tag]
+           <P|push>         <image-name>[:tag] [image-name[:tag] ...]
            <p|pull>         [<image-name>[:tag]]
            clean            [-c|--cache]
            run              <image-id>   [command [args]] [-- docker-args]
