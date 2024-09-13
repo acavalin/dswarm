@@ -175,8 +175,9 @@ class DockerSwarm
         output = output.join "\n"
         
         if ENV['DOCKER_REGISTRY']
-          output.gsub! ENV['DOCKER_REGISTRY'], ''
-          output.gsub! /IMAGE#{' ' * ENV['DOCKER_REGISTRY'].size}( *)(COMMAND|NODE)/, 'IMAGE\1\2'
+          parent = File.dirname ENV['DOCKER_REGISTRY']
+          output.gsub! parent, ''
+          output.gsub! /IMAGE#{' ' * parent.size}( *)(COMMAND|NODE)/, 'IMAGE\1\2'
         end
         
         max_length = output.split("\n").map{|l| l.strip.size }.max
@@ -264,7 +265,7 @@ class DockerSwarm
         system "docker buildx    prune -f" if @argv.include?('-c') || @argv.include?('--cache')
       # ------------------------------------------------------------------------
       when 'deploy'
-        run_in_bg = get_flag %w[ -b --background ]
+        run_in_fg = get_flag %w[ -f --foreground ]
         hook_present = File.exist?('dswarm-deploy.hook')
         
         system "dswarm-deploy.hook pre " if hook_present
@@ -275,7 +276,7 @@ class DockerSwarm
         conf = conf_names.detect{|f| File.exist? f }
         die "compose file not found (#{conf_names.join '|'})" unless conf
 
-        system "docker stack deploy --detach=#{run_in_bg} --with-registry-auth -c #{conf.shellescape} #{name.shellescape}"
+        system "docker stack deploy --detach=#{!run_in_fg} --with-registry-auth -c #{conf.shellescape} #{name.shellescape}"
         
         system "dswarm-deploy.hook post" if hook_present
       # ------------------------------------------------------------------------
@@ -284,7 +285,7 @@ class DockerSwarm
           USAGE: #{File.basename __FILE__} <action> [params]
           
           ### manage stacks & services
-           <d|deploy>       [stack-name] [compose.yml] [-b|--background]
+           <d|deploy>       [stack-name] [compose.yml] [-f|--foreground]
            ls
            ps               [stack-name] [-u|--usage]
            rm               [stack-name] [-f|--force]
