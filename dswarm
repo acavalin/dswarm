@@ -1,4 +1,6 @@
 #!/usr/bin/env ruby
+CMD = File.basename __FILE__
+
 %w[ yaml shellwords ].each{|lib| require lib }
 
 class DockerSwarm
@@ -68,6 +70,39 @@ class DockerSwarm
           when 'rm'
             die "missing arguments" if @argv.size < 2
             exec %Q|docker context rm #{@argv[1].shellescape}|
+          when 'env'
+            contesti = `docker context ls --format '{{.Name}}'`.split("\n")
+            die "context [#{@argv[1]}] not found" unless contesti.include?(@argv[1])
+            
+            case @argv[2]
+              when 'fish'
+                puts %Q|set -gx DOCKER_CONTEXT "#{@argv[1]}";|
+                puts %Q|# eval (#{CMD} context env #{@argv[1]} fish)|
+              when 'cmd'
+                puts %Q|SET DOCKER_CONTEXT=#{@argv[1]}|
+                puts %Q|REM @FOR /f "tokens=*" %i IN ('#{CMD} context env #{@argv[1]} cmd') DO @%i|
+              when 'powershell'
+                puts %Q|$Env:DOCKER_CONTEXT = "#{@argv[1]}"|
+                puts %Q[# & #{CMD} context env #{@argv[1]} powershell | Invoke-Expression]
+              else
+                puts %Q|export  DOCKER_CONTEXT="#{@argv[1]}"|
+                puts %Q|# eval $(#{CMD} context env #{@argv[1]})|
+            end
+          when 'unset'
+            case @argv[1]
+              when 'fish'
+                puts %Q|set -e DOCKER_CONTEXT;|
+                puts %Q|# eval (#{CMD} context unset fish)|
+              when 'cmd'
+                puts %Q|SET DOCKER_CONTEXT=|
+                puts %Q|REM   @FOR /f "tokens=*" %i IN ('./#{CMD} context unset cmd') DO @%i|
+              when 'powershell'
+                puts %Q|Remove-Item Env:\\DOCKER_CONTEXT|
+                puts %Q[# & ./#{CMD} context unset powershell | Invoke-Expression]
+              else
+                puts %Q|unset  DOCKER_CONTEXT|
+                puts %Q|# eval $(#{CMD} context unset)|
+            end
           else
             die "no subcommand given"
         end
@@ -121,7 +156,7 @@ class DockerSwarm
       when 'run'
         image = image_name @argv.shift
         cmd_args, docker_args = split_args
-        tmp_name = "#{File.basename __FILE__}_#{rand(1_000_000).to_s.rjust 6, '0'}"
+        tmp_name = "#{CMD}_#{rand(1_000_000).to_s.rjust 6, '0'}"
         exec "docker run --rm -ti --name #{tmp_name} --entrypoint '' #{docker_args} #{image} #{cmd_args}"
       # ------------------------------------------------------------------------
       when 'rm'
@@ -282,7 +317,7 @@ class DockerSwarm
       # ------------------------------------------------------------------------
       else
         puts <<~TXT
-          USAGE: #{File.basename __FILE__} <action> [params]
+          USAGE: #{CMD} <action> [params]
           
           ### manage stacks & services
            <d|deploy>       [stack-name] [compose.yml] [-f|--foreground]
@@ -308,6 +343,8 @@ class DockerSwarm
            <c|context>      ls
            <c|context>      add <context-name> <ssh-user@address>
            <c|context>      rm  <context-name>
+           <c|context>      env <context_name> [sh|fish|cmd|powershell]
+           <c|context>      unset              [sh|fish|cmd|powershell]
            ssh              [remote-command]
 
           ### .dockerswarm YAML file keys
@@ -369,6 +406,6 @@ class DockerSwarm
 end # class DockerSwarm
 
 running_in_script = $0 == __FILE__
-Process.setproctitle "ruby:#{File.basename __FILE__}" # same as: $0 = 'title'
+Process.setproctitle "ruby:#{CMD}" # same as: $0 = 'title'
 
 DockerSwarm.new(ARGV).run if running_in_script
