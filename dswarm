@@ -177,13 +177,15 @@ class DockerSwarm
       # ------------------------------------------------------------------------
       when 'ps'
         show_usage = get_flag %w[ -u --usage ]
+        show_full  = get_flag %w[ -f --full ]
         
         die "missing stack name" unless stack_name
         
         output = []
 
         print '.'
-        lines = `docker stack ps #{stack_name}`.split("\n")
+        lines = `docker stack ps #{stack_name} #{'--no-trunc' if show_full}`.split("\n")
+        lines.map!{|l| l.sub(/@sha256:[^ ]+/, '') } if show_full
         output << "===== Running ======"
         output << lines.grep(/Running|^ID/).join("\n")
 
@@ -326,7 +328,7 @@ class DockerSwarm
           ### manage stacks & services
            <d|deploy>       [stack-name] [compose.yml] [-f|--foreground]
            ls
-           ps               [stack-name] [-u|--usage]
+           ps               [stack-name] [-u|--usage] [-f|--full]
            rm               [stack-name] [-f|--force]
            <s|services>     [-f|--full]
            <i|inspect>      <service-id> [-p|--pretty]
