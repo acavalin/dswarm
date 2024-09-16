@@ -35,6 +35,8 @@ class DockerSwarm
     @env       = {}
     @conf_path = nil
     @cmd       = get_cmd_alias @argv.shift
+    
+    @is_quiet = get_flag %w[ -q --quiet ]
 
     # autoload environment from `.dockerswarm` YAML config file
     dir = File.expand_path Dir.pwd
@@ -43,11 +45,13 @@ class DockerSwarm
       env = YAML.unsafe_load_file conf_path rescue nil
       
       if env.is_a?(Hash)
-        print "⬡ #{@cmd || :help}   "
-        env.each do |k, v|
-          ENV[k] = v
-          print "⬢ #{k.sub 'DOCKER_', ''} #{v}   "
-        end; puts ''
+        unless @is_quiet
+          print "⬡ #{@cmd || :help}   "
+          env.each do |k, v|
+            ENV[k] = v
+            print "⬢ #{k.sub 'DOCKER_', ''} #{v}   "
+          end; puts ''
+        end
         @conf_path, @env = conf_path, env
         break
       else
@@ -317,7 +321,7 @@ class DockerSwarm
       # ------------------------------------------------------------------------
       else
         puts <<~TXT
-          USAGE: #{CMD} <action> [params]
+          USAGE: #{CMD} <action> [params] [-q|--quiet]
           
           ### manage stacks & services
            <d|deploy>       [stack-name] [compose.yml] [-f|--foreground]
