@@ -1,9 +1,9 @@
 #!/usr/bin/env ruby
-CMD = File.basename __FILE__
-
-%w[ yaml shellwords ].each{|lib| require lib }
-
 class DockerSwarm
+  %w[ yaml shellwords ].each{|lib| require lib }
+  
+  VERSION             = '1.1.1'
+  CMD                 = File.basename __FILE__
   DEFAULT_CMD_ARGS    = 'bash -il'
   DEFAULT_DOCKER_ARGS = ''
   
@@ -15,6 +15,7 @@ class DockerSwarm
     'inspect'  => %w[ i ],
     'logs'     => %w[ l ],
     'restart'  => %w[ r ],
+    'update'   => %w[ u ],
     'top'      => %w[ t ],
     'exec'     => %w[ e ],
     'run'      => %w[   ],
@@ -24,6 +25,7 @@ class DockerSwarm
     'push'     => %w[ P ],
     'pull'     => %w[ p ],
     'deploy'   => %w[ d ],
+    'login'    => %w[   ],
     'images'   => %w[ lsi   ],
     'clean'    => %w[ clear ],
   }
@@ -129,9 +131,15 @@ class DockerSwarm
           list = `docker service ls`.split("\n")
           puts list.shift
         else
-          list = `docker service ls --format '{{.Name}}'`.split("\n").sort
+          list = `docker service ls --format 'table {{.Name}}\t@ {{.Image}}'`.split("\n").sort
         end
-        list.select!{|i| i.include? "#{stack_name}_" } if stack_name
+        
+        if stack_name
+          list. # filter by stack_name and remove prefix from service name
+            select!{|i| i.include? "#{stack_name}_" }.
+            map!{|i| i.sub /^#{stack_name}_/, '' }
+        end
+        
         puts list
       # ------------------------------------------------------------------------
       when 'inspect'
@@ -144,6 +152,24 @@ class DockerSwarm
       # ------------------------------------------------------------------------
       when 'restart'
         exec "docker service update --force #{service_name}"
+      # ------------------------------------------------------------------------
+      when 'update'
+        # get the image name for this service
+        srv, img = %x[
+          docker service ls \
+            --format '{{.Name}}|{{.Image}}' \
+            --filter NAME=#{service_name}
+        ].strip.split('|')
+        
+        if srv && img
+          registry_login
+          
+          img = img ? File.basename(img.to_s).split(':').first.to_s : :no_image
+          img = "#{img}:#{@argv[1] || :latest}"
+          exec "docker service update --with-registry-auth --image #{ENV['DOCKER_REGISTRY']}/#{img} #{srv}"
+        else
+          die "no service or image found"
+        end
       # ------------------------------------------------------------------------
       when 'top'
         id = container_id
@@ -227,6 +253,10 @@ class DockerSwarm
         print "\r"
         puts output
       # ------------------------------------------------------------------------
+      when 'login'
+        die "DOCKER_REGISTRY env undefined" unless ENV['DOCKER_REGISTRY']
+        system "docker login #{registry_domain}"
+      # ------------------------------------------------------------------------
       when 'images'
         lines = `docker image ls`.split("\n")
         puts lines.shift
@@ -263,7 +293,7 @@ class DockerSwarm
 
           if old_id != new_id
             unless logged_in
-              system "docker login registry.gitlab.com"
+              registry_login
               logged_in = true
             end
             puts ''
@@ -273,12 +303,9 @@ class DockerSwarm
             puts "NOTE: image already pushed - #{new_id} / #{File.basename name}\n\n"
           end
         end
-
       # ------------------------------------------------------------------------
       when 'pull'
-        die "DOCKER_REGISTRY env undefined" unless ENV['DOCKER_REGISTRY']
-        
-        system "docker login registry.gitlab.com"
+        registry_login
         
         if name = @argv[0]
           name, tag = name.to_s.chomp(File::SEPARATOR).split(':')
@@ -324,39 +351,43 @@ class DockerSwarm
       else
         puts <<~TXT
           USAGE: #{CMD} <action> [params] [-q|--quiet]
-          
-          ### manage stacks & services
-           <d|deploy>       [stack-name] [compose.yml] [-f|--foreground]
-           ls
-           ps               [stack-name] [-u|--usage] [-f|--full]
-           rm               [stack-name] [-f|--force]
-           <s|services>     [-f|--full]
-           <i|inspect>      <service-id> [-p|--pretty]
-           <l|logs>         <service-id> [-f|--follow]
-           <r|restart>      <service-id>
-           <t|top>          <service-id>
-           <e|exec>         <service-id> [command [args]] [-- docker-args]
+         
+          ### STACK actions
+            <d|deploy>       [stack-name] [compose.yml] [-f|--foreground]
+            ls
+            ps               [stack-name] [-u|--usage] [-f|--full]
+            rm               [stack-name] [-f|--force]
+            <s|services>     [-f|--full]
+           
+          ### SERVICE actions
+            <i|inspect>      <service-id> [-p|--pretty]
+            <l|logs>         <service-id> [-f|--follow]
+            <r|restart>      <service-id>
+            <u|update>       <service-id> [image-tag]
+            <t|top>          <service-id>
+            <e|exec>         <service-id> [command [args]] [-- docker-args]
 
-          ### manage images
-           <lsi|images>
-           <b|build>        <image-name>[:tag] [build-folder]
-           <P|push>         <image-name>[:tag] [image-name[:tag] ...]
-           <p|pull>         [<image-name>[:tag]]
-           <clean|clear>    [-c|--cache]
-           run              <image-id>   [command [args]] [-- docker-args]
+          ### IMAGE actions
+            login            # interactive login to DOCKER_REGISTRY
+            <lsi|images>
+            <b|build>        <image-name>[:tag] [build-folder]
+            <P|push>         <image-name>[:tag] [image-name[:tag] ...]
+            <p|pull>         [<image-name>[:tag]]
+            <clean|clear>    [-c|--cache]
+            run              <image-id>   [command [args]] [-- docker-args]
           
-          ### manage contexts
-           <c|context>      ls
-           <c|context>      add <context-name> <ssh-user@address>
-           <c|context>      rm  <context-name>
-           <c|context>      env <context_name> [sh|fish|cmd|powershell]
-           <c|context>      unset              [sh|fish|cmd|powershell]
-           ssh              [remote-command]
+          ### CONTEXT actions
+            <c|context>      ls
+            <c|context>      add <context-name> <ssh-user@address>
+            <c|context>      rm  <context-name>
+            <c|context>      env <context_name> [sh|fish|cmd|powershell]
+            <c|context>      unset              [sh|fish|cmd|powershell]
+            ssh              [remote-command]
 
-          ### .dockerswarm YAML file keys
-           DOCKER_CONTEXT   context name / target machine
-           DOCKER_STACK     stack name   / service-id prefix
-           DOCKER_REGISTRY  images remote base path
+          ### `.dockerswarm` YAML keys
+            DOCKER_CONTEXT   context name / target machine
+            DOCKER_STACK     stack name   / service-id prefix
+            DOCKER_REGISTRY  repository base path
         TXT
     end # case - main action
   end # run
@@ -387,11 +418,23 @@ class DockerSwarm
   # docker ps --format "table {{.Names}}\t{{ .Labels }}"
   def container_id = `docker ps --filter label=com.docker.swarm.service.name=#{service_name} --format '{{.ID}}'`.split("\n").first
   
-  def service_name(name=nil) = [ENV['DOCKER_STACK'   ], name || @argv.first].compact.join('_')
+  def service_name(name=nil) = [ENV['DOCKER_STACK'   ], name || @argv.first || :no_service].compact.join('_')
   
-  def image_name(name=nil)   = [ENV['DOCKER_REGISTRY'], name || @argv.first].compact.join('/')
-
-  def stack_name             = @@stack_name ||= (@argv.first || ENV['DOCKER_STACK'])
+  def image_name(name=nil)   = [ENV['DOCKER_REGISTRY'], name || @argv.first || :no_image].compact.join('/')
+  
+  def stack_name             = @@stack_name ||= (@argv.first || ENV['DOCKER_STACK'] || :no_stack)
+  
+  def registry_domain        = ENV['DOCKER_REGISTRY'].to_s.split('/', 2).first || :no_registry
+  
+  def registry_login
+    die "DOCKER_REGISTRY env undefined" unless ENV['DOCKER_REGISTRY']
+    
+    print 'Logging in ... '
+    logged_in = system "docker login #{registry_domain}",
+                       in: :close, out: '/dev/null', err: [:child, :out]
+    puts "#{logged_in ? :SUCCESS : :ERROR}"
+    exit 1 unless logged_in
+  end # registry_login
 
   def split_args(default_args1: DEFAULT_CMD_ARGS, default_args2: DEFAULT_DOCKER_ARGS)
     if sep_pos = @argv.index('--')
@@ -411,7 +454,7 @@ class DockerSwarm
   def image_ids_update(data) = File.write("#{@conf_path}.image-versions", data.to_yaml)
 end # class DockerSwarm
 
-running_in_script = $0 == __FILE__
-Process.setproctitle "ruby:#{CMD}" # same as: $0 = 'title'
-
-DockerSwarm.new(ARGV).run if running_in_script
+if $0 == __FILE__ # running as a script
+  Process.setproctitle "ruby:#{DockerSwarm::CMD}"
+  DockerSwarm.new(ARGV).run
+end
