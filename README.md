@@ -22,14 +22,15 @@ USAGE: dswarm <action> [params]
 
 ### 2.1 Actions for managing stacks & services
 ~~~
-  <d|deploy>       [stack-name] [compose.yml]
-  ls
-  ps               [stack-name] [-u|--usage]
+  <d|deploy>       [stack-name] [compose.yml] [-f|--foreground]
+  ls               [-s|--simple]
+  ps               [stack-name] [-u|--usage] [-f|--full]
   rm               [stack-name] [-f|--force]
   <s|services>     [-f|--full]
   <i|inspect>      <service-id> [-p|--pretty]
   <l|logs>         <service-id> [-f|--follow]
   <r|restart>      <service-id>
+  <u|update>       <service-id> [image-tag]
   <t|top>          <service-id>
   <e|exec>         <service-id> [command [args]] [-- docker-args]
 ~~~
@@ -43,7 +44,7 @@ passing the argument `pre`/`post` respectively before and after the deploy proce
   <b|build>        <image-name>[:tag] [build-folder]
   <P|push>         <image-name>[:tag]
   <p|pull>         [<image-name>[:tag]]
-  clean            [-c|--cache]
+  <clean|clear>    [-c|--cache]
   run              <image-id>   [command [args]] [-- docker-args]
 ~~~
 
@@ -56,6 +57,8 @@ The file must be inside the build folder.
   <c|context>      ls
   <c|context>      add <context-name> <ssh-user@address>
   <c|context>      rm  <context-name>
+  <c|context>      env <context_name> [sh|fish|cmd|powershell]
+  <c|context>      unset              [sh|fish|cmd|powershell]
   ssh              [remote-command]
 ~~~
 
