@@ -1,12 +1,12 @@
 #!/usr/bin/env ruby
 class DockerSwarm
   %w[ yaml shellwords ].each{|lib| require lib }
-  
+
   VERSION             = '1.1.3'
   CMD                 = File.basename __FILE__
   DEFAULT_CMD_ARGS    = 'bash -il'
   DEFAULT_DOCKER_ARGS = ''
-  
+
   CMD_ALIASES = {
     'context'  => %w[ c ],
     'ssh'      => %w[   ],
@@ -29,15 +29,15 @@ class DockerSwarm
     'images'   => %w[ lsi   ],
     'clean'    => %w[ clear ],
   }
-  
+
   def get_cmd_alias(cmd) = CMD_ALIASES.detect{|long, shorts| long == cmd || shorts.include?(cmd) }&.[](0)
-  
+
   def initialize(argv)
     @argv      = argv.dup
     @env       = {}
     @conf_path = nil
     @cmd       = get_cmd_alias @argv.shift
-    
+
     @is_quiet = get_flag %w[ -q --quiet ]
 
     # autoload environment from `.dockerswarm` YAML config file
@@ -45,7 +45,7 @@ class DockerSwarm
     loop do
       conf_path = File.join(dir, '.dockerswarm')
       env = YAML.unsafe_load_file conf_path rescue nil
-      
+
       if env.is_a?(Hash)
         unless @is_quiet
           print "⬡ #{@cmd || :help}   "
@@ -63,7 +63,7 @@ class DockerSwarm
       end
     end
   end # initialize
-  
+
   def run
     case @cmd # main action - https://docs.docker.com/reference/cli/docker/
       # ------------------------------------------------------------------------
@@ -79,7 +79,7 @@ class DockerSwarm
           when 'env'
             contesti = `docker context ls --format '{{.Name}}'`.split("\n")
             die "context [#{@argv[1]}] not found" unless contesti.include?(@argv[1])
-            
+
             case @argv[2]
               when 'fish'
                 puts %Q|set -gx DOCKER_CONTEXT "#{@argv[1]}";|
@@ -115,10 +115,10 @@ class DockerSwarm
       # ------------------------------------------------------------------------
       when 'ssh'
         die "DOCKER_CONTEXT env undefined" unless ENV['DOCKER_CONTEXT']
-        
+
         user_host = `docker context inspect --format '{{.Endpoints.docker.Host}}' #{ENV['DOCKER_CONTEXT']}`.strip.sub('ssh://', '')
         cmd = @argv.map{|i| i.shellescape }.join(' ')
-        
+
         exec "ssh #{user_host} #{cmd}"
       # ------------------------------------------------------------------------
       when 'ls'
@@ -134,13 +134,13 @@ class DockerSwarm
         else
           list = `docker service ls --format 'table {{.Name}}\t@ {{.Image}}'`.split("\n").sort
         end
-        
+
         if stack_name
           list. # filter by stack_name and remove prefix from service name
             select!{|i| i.include? "#{stack_name}_" }.
             map!{|i| i.sub /^#{stack_name}_/, '' }
         end
-        
+
         puts list
       # ------------------------------------------------------------------------
       when 'inspect'
@@ -161,10 +161,10 @@ class DockerSwarm
             --format '{{.Name}}|{{.Image}}' \
             --filter NAME=#{service_name}
         ].strip.split('|')
-        
+
         if srv && img
           registry_login
-          
+
           img = img ? File.basename(img.to_s).split(':').first.to_s : :no_image
           img = "#{img}:#{@argv[1] || :latest}"
           exec "docker service update --with-registry-auth --image #{ENV['DOCKER_REGISTRY']}/#{img} #{srv}"
@@ -192,22 +192,22 @@ class DockerSwarm
       # ------------------------------------------------------------------------
       when 'rm'
         is_forced = get_flag %w[ -f --force ]
-      
+
         die "missing stack name" unless stack_name
-        
+
         unless is_forced
           print "Remove `#{stack_name}`? [y|N] "
           exit if STDIN.gets.strip != 'y'
         end
-        
+
         exec "docker stack rm #{stack_name}"
       # ------------------------------------------------------------------------
       when 'ps'
         show_usage = get_flag %w[ -u --usage ]
         show_full  = get_flag %w[ -f --full ]
-        
+
         die "missing stack name" unless stack_name
-        
+
         output = []
 
         print '.'
@@ -222,7 +222,7 @@ class DockerSwarm
           output << "===== NOT running =="
           output << lines.join("\n")
         end
-        
+
         print '.'
         output << ''
         output << "===== Containers ==="
@@ -239,9 +239,9 @@ class DockerSwarm
           output << lines.shift
           output << lines.sort.join("\n")
         end
-        
+
         output = output.join "\n"
-        
+
         if ENV['DOCKER_REGISTRY']
           parent = File.dirname ENV['DOCKER_REGISTRY']
           output = output.split("\n").map{|line|
@@ -251,7 +251,7 @@ class DockerSwarm
             line
           }.join("\n")
         end
-        
+
         max_length = output.split("\n").map{|l| l.strip.size }.max
         output.gsub! /^(=====.{15})/, "\\1#{'='*(max_length - 20)}"
 
@@ -273,7 +273,7 @@ class DockerSwarm
         name, tag = @argv[0].to_s.chomp(File::SEPARATOR).split(':')
         tag ||= :latest
         folder = @argv[1] || name
-        
+
         Dir.chdir(folder) do
           hook_present = File.exist?('dswarm-build.hook')
           system "dswarm-build.hook pre " if hook_present
@@ -287,7 +287,7 @@ class DockerSwarm
 
         ids  = image_ids_read
         logged_in = false
-        
+
         while name = @argv.shift
           name, tag = name.to_s.chomp(File::SEPARATOR).split(':')
           tag ||= :latest
@@ -311,12 +311,12 @@ class DockerSwarm
       # ------------------------------------------------------------------------
       when 'pull'
         registry_login
-        
+
         if name = @argv[0]
           name, tag = name.to_s.chomp(File::SEPARATOR).split(':')
           tag ||= :latest
           name = image_name "#{name}:#{tag}"
-          
+
           exec "docker image pull #{name.shellescape}"
         else
           puts "pulling all previously pushed images..."
@@ -324,7 +324,7 @@ class DockerSwarm
           images_current = `docker image ls --format "{{.Repository}}:{{.Tag}}|{{.ID}}"`.
             split("\n").select{|l| l.include? ENV['DOCKER_REGISTRY'] }.
             inject({}){|h, l| k, v = l.split('|'); h.merge k => v }
-          
+
           images_pushed.each do |name, id|
             next if id != images_current[name]
             puts "\n===> #{name}"
@@ -340,30 +340,30 @@ class DockerSwarm
       when 'deploy'
         run_in_fg = get_flag %w[ -f --foreground ]
         hook_present = File.exist?('dswarm-deploy.hook')
-        
+
         system "dswarm-deploy.hook pre " if hook_present
-        
+
         name = stack_name
-        
+
         conf_names = [@argv[1], "#{name}.yml", "compose.yml", "docker-compose.yml"].compact
         conf = conf_names.detect{|f| File.exist? f }
         die "compose file not found (#{conf_names.join '|'})" unless conf
 
         system "docker stack deploy --detach=#{!run_in_fg} --with-registry-auth -c #{conf.shellescape} #{name.shellescape}"
-        
+
         system "dswarm-deploy.hook post" if hook_present
       # ------------------------------------------------------------------------
       else
         puts <<~TXT
           USAGE: #{CMD} <action> [params] [-q|--quiet]
-         
+
           ### STACK actions
             <d|deploy>       [stack-name] [compose.yml] [-f|--foreground]
             ls               [-s|--simple]
             ps               [stack-name] [-u|--usage] [-f|--full]
             rm               [stack-name] [-f|--force]
             <s|services>     [-f|--full]
-           
+
           ### SERVICE actions
             <i|inspect>      <service-id> [-p|--pretty]
             <l|logs>         <service-id> [-f|--follow]
@@ -380,7 +380,7 @@ class DockerSwarm
             <p|pull>         [<image-name>[:tag]]
             <clean|clear>    [-c|--cache]
             run              <image-id>   [command [args]] [-- docker-args]
-          
+
           ### CONTEXT actions
             <c|context>      ls
             <c|context>      add <context-name> <ssh-user@address>
@@ -396,44 +396,44 @@ class DockerSwarm
         TXT
     end # case - main action
   end # run
-  
-  
+
+
   private # ____________________________________________________________________
-  
+
 
   def die(msg, code: 1)
     puts "ERR: #{msg}"
     exit code
   end # die
-  
+
   def get_flag(flags = %w[])
     found = false
-    
+
     flags.each do |f|
       next unless @argv.include?(f)
-      
+
       @argv.delete f
       found = true
     end
-    
+
     found
   end # get_flag
-  
+
   # https://devops.stackexchange.com/questions/12924/how-to-get-the-ids-of-docker-containers-that-belong-to-a-service-given-the-serv/12963#12963
   # docker ps --format "table {{.Names}}\t{{ .Labels }}"
   def container_id = `docker ps --filter label=com.docker.swarm.service.name=#{service_name} --format '{{.ID}}'`.split("\n").first
-  
+
   def service_name(name=nil) = [ENV['DOCKER_STACK'   ], name || @argv.first || :no_service].compact.join('_')
-  
+
   def image_name(name=nil)   = [ENV['DOCKER_REGISTRY'], name || @argv.first || :no_image].compact.join('/')
-  
+
   def stack_name             = @@stack_name ||= (@argv.first || ENV['DOCKER_STACK'] || :no_stack)
-  
+
   def registry_domain        = ENV['DOCKER_REGISTRY'].to_s.split('/', 2).first || :no_registry
-  
+
   def registry_login
     die "DOCKER_REGISTRY env undefined" unless ENV['DOCKER_REGISTRY']
-    
+
     print 'Logging in ... '
     logged_in = system "docker login #{registry_domain}",
                        in: :close, out: '/dev/null', err: [:child, :out]
@@ -449,7 +449,7 @@ class DockerSwarm
       args1 = @argv.map{|i| i.shellescape }.join(' ')
       args2 = []
     end
-    
+
     [args1.size > 0 ? args1 : default_args1,
      args2.size > 0 ? args2 : default_args2]
   end # split_args
