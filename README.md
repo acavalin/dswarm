@@ -48,9 +48,27 @@ passing the argument `pre`/`post` respectively before and after the deploy proce
   run              <image-id>   [command [args]] [-- docker-args]
 ~~~
 
-Note: The `build` action can run the eventual script `dswarm-build.hook`
-passing the argument `pre`/`post` respectively before and after the build process.
-The file must be inside the build folder.
+Note: The `build` action can read optional (`docker image build`) parameters from a `dswarm.yml` file within the `[build-folder]`:
+
+~~~yaml
+context: path_to_context
+
+file: path_to_Dockerfile
+
+tags:
+- app:latest
+- $ echo "app:`date +%Y%m%d`-`git rev-parse --short HEAD`"
+
+build-args:
+- NODE_VERSION: xx.yy
+- RUBY_VERSION: $ sed -r 's/ruby-//' ../../.ruby-version
+
+# eventual pre/post build commands
+pre_cmd: echo BEGIN_BUILD
+post_cmd: echo END_BUIL
+~~~
+
+any string starting with `$ ` will be replaced by the output of its trailing shell command.
 
 ### 2.3 Actions for managing contexts
 ~~~
