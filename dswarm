@@ -2,7 +2,7 @@
 class DockerSwarm
   %w[ yaml shellwords ].each{|lib| require lib }
 
-  VERSION             = '1.2.1'
+  VERSION             = '1.2.2'
   CMD                 = File.basename __FILE__
   DEFAULT_CMD_ARGS    = 'bash -il'
   DEFAULT_DOCKER_ARGS = ''
@@ -274,18 +274,19 @@ class DockerSwarm
       # ------------------------------------------------------------------------
       when 'build'
         name, tag = @argv[0].to_s.chomp(File::SEPARATOR).split(':')
+        tag ||= :latest  # default tag
         folder = @argv[1] || name
 
         Dir.chdir(folder) do
           c = parse_image_config
-          c['tags'] << @argv[0] if tag  # apply tag from cli
+          c['tags'] << "#{name}:#{tag}"
 
           system c['pre_cmd'] if c['pre_cmd']
 
           psystem [
             'docker build',
             c['build-args'].map{|k,v| "--build-arg #{k.shellescape}=#{v.to_s.shellescape}" },
-            c['tags'].map{|i| "-t #{i.shellescape}"},
+            c['tags'].map{|i| "-t #{image_name(i).shellescape}"},
             ("-f #{c['file'].shellescape}" if c['file']),
             c['context']
           ].flatten.compact.join(' ')
