@@ -2,7 +2,7 @@
 class DockerSwarm
   %w[ yaml shellwords ].each{|lib| require lib }
 
-  VERSION             = '1.3.1'
+  VERSION             = '1.3.2'
   CMD                 = File.basename __FILE__
   DEFAULT_CMD_ARGS    = 'bash -il'
   DEFAULT_DOCKER_ARGS = ''
@@ -216,31 +216,39 @@ class DockerSwarm
 
         output = []
 
-        print '.'
-        lines = `docker stack ps #{stack_name} #{'--no-trunc' if show_full}`.split("\n")
-        lines.map!{|l| l.sub(/@sha256:[^ ]+/, '') } if show_full
-        output << "===== Running ======"
-        output << lines.grep(/Running|^ID/).join("\n")
+        cmd = "docker stack ps #{stack_name} #{'--no-trunc' if show_full} --format 'table {{.Name}}\\t{{.Image}}\\t{{.ID}}\\t{{.Node}}\\t{{.CurrentState}}\\t{{.DesiredState}}\\t{{.Error}}'"
+        lines = psystem(cmd, capture: true, blank: false).split("\n")
+        header = lines.shift
+        lines.sort!
+        output << "===== Services ====="
+        output << header
+        output << lines.grep(/Running/).join("\n")
 
-        lines = lines.grep_v(/Running|^ID/)
+        lines = lines.grep_v(/Running/)
         if lines.size > 0
           output << ''
-          output << "===== NOT running =="
+          output << "===== Services KO =="
+          output << header
           output << lines.join("\n")
         end
 
-        print '.'
         output << ''
         output << "===== Containers ==="
-        output << `docker container ls --filter label=com.docker.stack.namespace=#{stack_name}`.
-          split("\n").grep(/#{stack_name}|^CONTAINER ID/).join("\n")
+        cmd = "docker container ls --filter label=com.docker.stack.namespace=#{stack_name} --format 'table {{.Names}}\\t{{.Image}}\\t{{.ID}}\\t{{.Status}}\\t{{.Ports}}'"
+        lines = psystem(cmd, capture: true, blank: false).
+          gsub('0.0.0.0', '*').gsub('[::]', '*').
+          gsub(/(\.\d+)\.(\p{Alnum}{12})(\p{Alnum}{13})/, '\1 \2').sub(/NAMES {13}/, 'NAMES').
+          gsub(/(.+\s(\d+.[tu][cd]p).*)/){|m| m.gsub(/->\d+(.tcp)*/,'').split(', ').uniq.join ',' }.strip.
+          split("\n")
+        output << lines.shift
+        output << lines.sort.join("\n")
 
         if show_usage
-          print '.'
           output << ''
           output << "===== MEM/CPU ======"
-          lines = `docker stats --all --no-stream --format "table {{.Name}}\t{{.MemUsage}}\t{{.CPUPerc}}"`.
-            gsub(/(\.\d)\.([^ \t]+)/){|match| "#{$1} #{$2}" }.
+          cmd = "docker stats --all --no-stream --format 'table {{.Name}}\\t{{.MemUsage}}\\t{{.CPUPerc}}'"
+          lines = psystem(cmd, capture: true).
+            gsub(/(\.\d+)\.(\p{Alnum}{12})(\p{Alnum}{13})/, '\1 \2').sub(/NAME {13}/, 'NAME').
             split("\n").grep_v(/0B \/ 0B\s+0.00%/).grep_v(/-- \/ --/)
           output << lines.shift
           output << lines.sort.join("\n")
@@ -252,16 +260,17 @@ class DockerSwarm
           parent = File.dirname ENV['DOCKER_REGISTRY']
           output = output.split("\n").map{|line|
             line.sub! parent, ''
-            #line.sub! /IMAGE#{' ' * parent.size}( *)(COMMAND|NODE)/, 'IMAGE\1\2'
             line.sub! ' ' * parent.size, ''
             line
           }.join("\n")
         end
 
         max_length = output.split("\n").map{|l| l.strip.size }.max
+        term_width = `tput cols`.to_i - 1
+        term_width = max_length if term_width < 0
+        max_length = [term_width, max_length].min
         output.gsub! /^(=====.{15})/, "\\1#{'='*(max_length - 20)}"
-
-        print "\r"
+        
         puts output
       # ------------------------------------------------------------------------
       when 'login'
@@ -269,7 +278,7 @@ class DockerSwarm
         psystem "docker login #{registry_domain}"
       # ------------------------------------------------------------------------
       when 'images'
-        lines = `docker image ls`.split("\n")
+        lines = `docker image ls 2> /dev/null`.split("\n")
         puts lines.shift
         puts ENV['DOCKER_REGISTRY'] \
           ? lines.select{|l| l.include? ENV['DOCKER_REGISTRY'] }
@@ -401,8 +410,8 @@ class DockerSwarm
             <l|logs>         <service-id> [-f|--follow]
             <r|restart>      <service-id>
             <u|update>       <service-id> [image-tag]
-            <t|top>          <service-id>
-            <e|exec>         <service-id> [command [args]] [-- docker-args]
+            <t|top>          <service-id>[.replica]
+            <e|exec>         <service-id>[.replica] [command [args]] [-- docker-args]
 
           ### IMAGE actions
             login            # interactive login to DOCKER_REGISTRY
@@ -455,18 +464,27 @@ class DockerSwarm
   end # get_flag
   
   # print command before calling system()
-  def psystem(cmd, run: true, call_exec: false, prefix: "RUNNING: ")
-    print("⬡ #{prefix}#{cmd}\n\n")
+  def psystem(cmd, run: true, capture: false, call_exec: false, prefix: "RUNNING: ", blank: true)
+    print(%Q|⬡ #{prefix}#{cmd}\n#{"\n" if blank}|)
     if run
-      call_exec ? exec(cmd) : system(cmd)
+      capture \
+        ? %x[#{cmd}]
+        : (call_exec ? exec(cmd) : system(cmd))
     end
   end # psystem
   
   def pexec(cmd, **kwargs) = psystem(cmd, **kwargs, call_exec: true)
 
   # https://devops.stackexchange.com/questions/12924/how-to-get-the-ids-of-docker-containers-that-belong-to-a-service-given-the-serv/12963#12963
-  # docker ps --format "table {{.Names}}\t{{ .Labels }}"
-  def container_id = `docker ps --filter label=com.docker.swarm.service.name=#{service_name} --format '{{.ID}}'`.split("\n").first
+  def container_id
+    service, replica = service_name.split '.'
+    lines = `docker ps --filter label=com.docker.swarm.service.name=#{service} --format '{{.Names}}\\t{{.ID}}'`.split("\n").sort
+    line = replica.to_i > 0 \
+      ? lines.detect{|l| l.start_with? "#{service}.#{replica}" }
+      : lines.first
+    puts %Q|⬡ TARGET: #{line || '--'}|
+    line.to_s.split("\s").last
+  end # container_id
 
   def service_name(name=nil) = [ENV['DOCKER_STACK'   ], name || @argv.first || :no_service].compact.join('_')
 
