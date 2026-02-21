@@ -1,8 +1,8 @@
 #!/usr/bin/env ruby
 class DockerSwarm
-  %w[ yaml shellwords ].each{|lib| require lib }
+  %w[ yaml shellwords open3 ].each{|lib| require lib }
 
-  VERSION             = '1.3.2'
+  VERSION             = '1.3.3'
   CMD                 = File.basename __FILE__
   DEFAULT_CMD_ARGS    = 'bash -il'
   DEFAULT_DOCKER_ARGS = ''
@@ -150,12 +150,23 @@ class DockerSwarm
         puts list
       # ------------------------------------------------------------------------
       when 'inspect'
-        is_pretty = @argv.include?('-p') || @argv.include?('--pretty')
+        is_pretty = get_flag(%w[ -p --pretty ])
         pexec "docker service inspect #{service_name} #{'--pretty' if is_pretty}"
       # ------------------------------------------------------------------------
       when 'logs'
-        is_follow = @argv.include?('-f') || @argv.include?('--follow')
-        pexec "docker service logs #{service_name} #{'-f' if is_follow}"
+        if get_flag(%w[ -s --save ])
+          cmd = "docker service logs #{service_name}"
+          psystem cmd, run: false
+          
+          stdout, stderr, status = Open3.capture3 cmd
+          File.write "#{service_name}.log", stdout
+          File.write "#{service_name}.err", stderr if stderr.to_s[0]
+          
+          puts "saved to #{service_name}.{log,err}"
+        else
+          is_follow = get_flag(%w[ -f --follow ])
+          pexec "docker service logs #{service_name} #{'-f' if is_follow}"
+        end
       # ------------------------------------------------------------------------
       when 'restart'
         pexec "docker service update --force #{service_name}"
@@ -407,7 +418,7 @@ class DockerSwarm
 
           ### SERVICE actions
             <i|inspect>      <service-id> [-p|--pretty]
-            <l|logs>         <service-id> [-f|--follow]
+            <l|logs>         <service-id> [-f|--follow] [-s|--save]
             <r|restart>      <service-id>
             <u|update>       <service-id> [image-tag]
             <t|top>          <service-id>[.replica]
