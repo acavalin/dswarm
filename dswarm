@@ -2,7 +2,7 @@
 class DockerSwarm
   %w[ yaml shellwords open3 ].each{|lib| require lib }
 
-  VERSION             = '1.3.3'
+  VERSION             = '1.3.4'
   CMD                 = File.basename __FILE__
   DEFAULT_CMD_ARGS    = 'bash -il'
   DEFAULT_DOCKER_ARGS = ''
@@ -220,14 +220,14 @@ class DockerSwarm
         pexec "docker stack rm #{stack_name}"
       # ------------------------------------------------------------------------
       when 'ps'
-        show_usage = get_flag %w[ -u --usage ]
-        show_full  = get_flag %w[ -f --full ]
+        show_containers = get_flag %w[ -c --containers ]
+        show_stats      = get_flag %w[ -s --stats ]
 
         die "missing stack name" unless stack_name
 
         output = []
 
-        cmd = "docker stack ps #{stack_name} #{'--no-trunc' if show_full} --format 'table {{.Name}}\\t{{.Image}}\\t{{.ID}}\\t{{.Node}}\\t{{.CurrentState}}\\t{{.DesiredState}}\\t{{.Error}}'"
+        cmd = "docker stack ps #{stack_name} --no-trunc --format 'table {{.Name}}\\t{{.Image}}\\t{{.ID}}\\t{{.Node}}\\t{{.CurrentState}}\\t{{.DesiredState}}\\t{{.Error}}'"
         lines = psystem(cmd, capture: true, blank: false).split("\n")
         header = lines.shift
         lines.sort!
@@ -243,18 +243,20 @@ class DockerSwarm
           output << lines.join("\n")
         end
 
-        output << ''
-        output << "===== Containers ==="
-        cmd = "docker container ls --filter label=com.docker.stack.namespace=#{stack_name} --format 'table {{.Names}}\\t{{.Image}}\\t{{.ID}}\\t{{.Status}}\\t{{.Ports}}'"
-        lines = psystem(cmd, capture: true, blank: false).
-          gsub('0.0.0.0', '*').gsub('[::]', '*').
-          gsub(/(\.\d+)\.(\p{Alnum}{12})(\p{Alnum}{13})/, '\1 \2').sub(/NAMES {13}/, 'NAMES').
-          gsub(/(.+\s(\d+.[tu][cd]p).*)/){|m| m.gsub(/->\d+(.tcp)*/,'').split(', ').uniq.join ',' }.strip.
-          split("\n")
-        output << lines.shift
-        output << lines.sort.join("\n")
+        if show_containers
+          output << ''
+          output << "===== Containers ==="
+          cmd = "docker container ls --filter label=com.docker.stack.namespace=#{stack_name} --format 'table {{.Names}}\\t{{.Image}}\\t{{.ID}}\\t{{.Status}}\\t{{.Ports}}'"
+          lines = psystem(cmd, capture: true, blank: false).
+            gsub('0.0.0.0', '*').gsub('[::]', '*').
+            gsub(/(\.\d+)\.(\p{Alnum}{12})(\p{Alnum}{13})/, '\1 \2').sub(/NAMES {13}/, 'NAMES').
+            gsub(/(.+\s(\d+.[tu][cd]p).*)/){|m| m.gsub(/->\d+(.tcp)*/,'').split(', ').uniq.join ',' }.strip.
+            split("\n")
+          output << lines.shift
+          output << lines.sort.join("\n")
+        end
 
-        if show_usage
+        if show_stats
           output << ''
           output << "===== MEM/CPU ======"
           cmd = "docker stats --all --no-stream --format 'table {{.Name}}\\t{{.MemUsage}}\\t{{.CPUPerc}}'"
@@ -412,7 +414,7 @@ class DockerSwarm
           ### STACK actions
             <d|deploy>       [stack-name] [compose.yml] [-f|--foreground]
             ls               [-s|--simple]
-            ps               [stack-name] [-u|--usage] [-f|--full]
+            ps               [stack-name] [-c|--containers] [-s|--stats]
             rm               [stack-name] [-f|--force]
             <s|services>     [-f|--full]
 
