@@ -24,15 +24,15 @@ USAGE: dswarm <action> [params]
 ~~~
   <d|deploy>       [stack-name] [compose.yml] [-f|--foreground]
   ls               [-s|--simple]
-  ps               [stack-name] [-u|--usage] [-f|--full]
+  ps               [stack-name] [-c|--containers] [-s|--stats]
   rm               [stack-name] [-f|--force]
   <s|services>     [-f|--full]
   <i|inspect>      <service-id> [-p|--pretty]
   <l|logs>         <service-id> [-f|--follow]
   <r|restart>      <service-id>
   <u|update>       <service-id> [image-tag]
-  <t|top>          <service-id>
-  <e|exec>         <service-id> [command [args]] [-- docker-args]
+  <t|top>          <service-id>[.replica]
+  <e|exec>         <service-id>[.replica] [command [args]] [-- docker-args]
 ~~~
 
 Note: The `deploy` action can run the eventual script `dswarm-deploy.hook`
@@ -42,13 +42,14 @@ passing the argument `pre`/`post` respectively before and after the deploy proce
 ~~~
   <lsi|images>     # list images
   <b|build>        <image-name>[:tag] [build-folder]
-  <P|push>         <image-name>[:tag]
+  <P|push>         <image-name>[:tag] [image-name[:tag] ...]
   <p|pull>         [<image-name>[:tag]]
   <clean|clear>    [-c|--cache]
   run              <image-id>   [command [args]] [-- docker-args]
 ~~~
 
-Note: The `build` action can read optional (`docker image build`) parameters from a `dswarm.yml` file within the `[build-folder]`:
+Note: The `build` action can read optional (`docker image build`) parameters from
+a `dswarm.yml` file within the `[build-folder]`:
 
 ~~~yaml
 context: path_to_context
@@ -64,8 +65,8 @@ build-args:
 - RUBY_VERSION: $ sed -r 's/ruby-//' ../../.ruby-version
 
 # eventual pre/post build commands
-pre_cmd: echo BEGIN_BUILD
-post_cmd: echo END_BUIL
+pre_cmd:  echo BEGIN_BUILD
+post_cmd: echo END_BUILD
 ~~~
 
 any string starting with `$ ` will be replaced by the output of its trailing shell command.
@@ -114,7 +115,7 @@ dswarm ssh chown smith:users /app-data
 dswarm deploy
 
 # show process statuses and CPU/MEM usage
-dswarm ps --usage
+dswarm ps --stats
 
 # open a bash shell in the first container running the `myapp` image
 # applying some docker options too (change process user)

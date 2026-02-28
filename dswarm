@@ -2,7 +2,7 @@
 class DockerSwarm
   %w[ yaml shellwords open3 ].each{|lib| require lib }
 
-  VERSION             = '1.3.4'
+  VERSION             = '1.4.0'
   CMD                 = File.basename __FILE__
   DEFAULT_CMD_ARGS    = 'bash -il'
   DEFAULT_DOCKER_ARGS = ''
@@ -38,7 +38,6 @@ class DockerSwarm
     @conf_path = nil
     @cmd       = get_cmd_alias @argv.shift
     @is_quiet  = get_flag %w[ -q --quiet ]
-    @load_deploy_env = false
 
     # autoload environment from `.dockerswarm` YAML config file
     dir = File.expand_path Dir.pwd
@@ -47,9 +46,6 @@ class DockerSwarm
       env = YAML.unsafe_load_file conf_path rescue nil
 
       if env.is_a?(Hash)
-        @load_deploy_env = env.key?('DEPLOY_ENV')
-        env.delete 'DEPLOY_ENV'
-
         unless @is_quiet
           print "⬡ #{@cmd || :help}   "
           env.each do |k, v|
@@ -89,31 +85,31 @@ class DockerSwarm
             case @argv[2]
               when 'fish'
                 puts %Q|set -gx DOCKER_CONTEXT "#{@argv[1]}";|
-                puts %Q|# eval (#{CMD} context env #{@argv[1]} fish)|
+                puts %Q|# eval (#{CMD} context env #{@argv[1]} fish --quiet)|
               when 'cmd'
                 puts %Q|SET DOCKER_CONTEXT=#{@argv[1]}|
-                puts %Q|REM @FOR /f "tokens=*" %i IN ('#{CMD} context env #{@argv[1]} cmd') DO @%i|
+                puts %Q|REM @FOR /f "tokens=*" %i IN ('#{CMD} context env #{@argv[1]} cmd --quiet') DO @%i|
               when 'powershell'
                 puts %Q|$Env:DOCKER_CONTEXT = "#{@argv[1]}"|
-                puts %Q[# & #{CMD} context env #{@argv[1]} powershell | Invoke-Expression]
+                puts %Q[# & #{CMD} context env #{@argv[1]} powershell --quiet | Invoke-Expression]
               else
                 puts %Q|export  DOCKER_CONTEXT="#{@argv[1]}"|
-                puts %Q|# eval $(#{CMD} context env #{@argv[1]})|
+                puts %Q|# eval $(#{CMD} context env #{@argv[1]} --quiet)|
             end
           when 'unset'
             case @argv[1]
               when 'fish'
                 puts %Q|set -e DOCKER_CONTEXT;|
-                puts %Q|# eval (#{CMD} context unset fish)|
+                puts %Q|# eval (#{CMD} context unset fish --quiet)|
               when 'cmd'
                 puts %Q|SET DOCKER_CONTEXT=|
-                puts %Q|REM   @FOR /f "tokens=*" %i IN ('./#{CMD} context unset cmd') DO @%i|
+                puts %Q|REM   @FOR /f "tokens=*" %i IN ('./#{CMD} context unset cmd --quiet') DO @%i|
               when 'powershell'
                 puts %Q|Remove-Item Env:\\DOCKER_CONTEXT|
-                puts %Q[# & ./#{CMD} context unset powershell | Invoke-Expression]
+                puts %Q[# & ./#{CMD} context unset powershell --quiet | Invoke-Expression]
               else
                 puts %Q|unset  DOCKER_CONTEXT|
-                puts %Q|# eval $(#{CMD} context unset)|
+                puts %Q|# eval $(#{CMD} context unset --quiet)|
             end
           else
             die "no subcommand given"
@@ -387,11 +383,10 @@ class DockerSwarm
         conf = conf_names.detect{|f| File.exist? f }
         die "compose file not found (#{conf_names.join '|'})" unless conf
 
-        env = {}
-
-        # NOTE: docker swarm supports "file:" only, not "environment:"!
-        if @load_deploy_env
-          env_file = "#{File.basename conf, File.extname(conf)}.env"
+        # NOTE: docker swarm only supports "file:" key and not "environment:" one!
+        env, env_file = {}, "#{File.basename conf, File.extname(conf)}.env"
+        
+        if File.exist?(env_file)
           env = YAML.unsafe_load_file env_file rescue {}
           env.each do |k, v|
             ENV[k.to_s] = v.to_s
@@ -401,7 +396,7 @@ class DockerSwarm
 
         psystem "docker stack deploy --detach=#{!run_in_fg} --with-registry-auth -c #{conf.shellescape} #{name.shellescape}"
 
-        if @load_deploy_env
+        if File.exist?(env_file)
           env.each{|k, v| File.unlink("#{k}.env") if File.exist?("#{k}.env") }
         end
 
@@ -413,6 +408,9 @@ class DockerSwarm
 
           ### STACK actions
             <d|deploy>       [stack-name] [compose.yml] [-f|--foreground]
+              # if compose.env exists and contains a dictionary of secrets
+              # then relative EVN vars and temporary KEY.env files will be
+              # created for use with docker secrets
             ls               [-s|--simple]
             ps               [stack-name] [-c|--containers] [-s|--stats]
             rm               [stack-name] [-f|--force]
@@ -447,9 +445,6 @@ class DockerSwarm
             DOCKER_CONTEXT   context name / target machine
             DOCKER_STACK     stack name   / service-id prefix
             DOCKER_REGISTRY  repository base path
-            DEPLOY_ENV       if present: during deploy creates EVN vars and temporary
-                             NAME.env files from the hash inside the YAML file
-                             '[stack-name].env' (for docker secrets usage)
         TXT
     end # case - main action
   end # run
