@@ -2,7 +2,7 @@
 class DockerSwarm
   %w[ yaml shellwords open3 zlib ].each{|lib| require lib }
 
-  VERSION             = '1.6.0'
+  VERSION             = '1.6.1'
   CMD                 = File.basename __FILE__
   DEFAULT_CMD_ARGS    = 'bash -il'
   DEFAULT_DOCKER_ARGS = ''
@@ -403,7 +403,7 @@ class DockerSwarm
           end
         end
 
-        psystem "docker stack deploy --detach=#{!run_in_fg} --with-registry-auth -c #{conf.shellescape} #{name.shellescape}"
+        psystem "docker stack deploy --detach=#{!run_in_fg} --with-registry-auth --prune -c #{conf.shellescape} #{name.shellescape}"
 
         if File.exist?(env_file)
           env.each{|k, v| File.unlink("#{k}.env") if File.exist?("#{k}.env") }
