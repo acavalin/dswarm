@@ -2,7 +2,7 @@
 class DockerSwarm
   %w[ yaml shellwords open3 zlib ].each{|lib| require lib }
 
-  VERSION             = '1.7.1'
+  VERSION             = '1.7.2'
   CMD                 = File.basename __FILE__
   DEFAULT_CMD_ARGS    = 'bash -il'
   DEFAULT_DOCKER_ARGS = ''
@@ -241,56 +241,44 @@ class DockerSwarm
         cmd = "docker stack ps #{stack_name} --no-trunc --format '#{ header.map{|k| %Q|{{.#{k}}}| }.join('\t') }'"
         tmp = psystem(cmd, capture: true, blank: false)
         tmp.gsub! /@sha256:(....)[a-z0-9]+/, ' \1'  #/
-        lines = csv2table(tmp, header: header)
+        lines = csv2table(tmp, header: header, tag: 'SERVICES')
 
         header = lines.shift
         lines.sort!
-        output << "===== Services ====="
         output << header
         output << lines.grep(/Running/).join("\n")
 
         lines = lines.grep_v(/Running/)
-        if lines.size > 0
-          output << ''
-          output << "===== Services KO =="
-          output << header
-          output << lines.join("\n")
+        output += lines.map do |l|
+          l.sub!(/^([^ ]+)( .+)/){ "\033[0;30;41m#{$1}\033[0m#{$2}" }
         end
 
         if show_containers
           output << ''
-          output << "===== Containers ==="
           header = %w[ Names Image ID Status Ports ]
           cmd = "docker container ls --filter label=com.docker.stack.namespace=#{stack_name} --format '#{ header.map{|k| %Q|{{.#{k}}}| }.join('\t') }'"
           tmp = psystem(cmd, capture: true, blank: false).
             gsub('0.0.0.0', '*').gsub('[::]', '*').
             gsub(/(\.\d+)\.(\p{Alnum}{12})(\p{Alnum}{13})/, '\1 \2').sub(/NAMES {13}/, 'NAMES').
             gsub(/(.+\s(\d+.[tu][cd]p).*)/){|m| m.gsub(/->\d+(.tcp)*/,'').split(', ').uniq.join ',' }.strip
-          lines = csv2table(tmp, header: header)
+          lines = csv2table(tmp, header: header, tag: 'CONTAINERS')
           output << lines.shift
           output << lines.sort.join("\n")
         end
 
         if show_stats
           output << ''
-          output << "===== MEM/CPU ======"
           header = %w[ Name MemUsage CPUPerc ]
           cmd = "docker stats --all --no-stream --format '#{ header.map{|k| %Q|{{.#{k}}}| }.join('\t') }'"
           tmp = psystem(cmd, capture: true).gsub(/(\.\d+)\.(\p{Alnum}{25})/, "\\1\t\\2")
           tmp = tmp.split("\n").grep(/#{ENV['DOCKER_STACK']}_/).join("\n") if ENV['DOCKER_STACK']
-          lines = csv2table(tmp, header: header.insert(1, 'ID'))
+          lines = csv2table(tmp, header: header.insert(1, 'ID'), tag: 'MEM/CPU')
           lines = lines.grep_v(/0B \/ 0B\s+0.00%/).grep_v(/-- \/ --/)
           output << lines.shift
           output << lines.sort.join("\n")
         end
 
         output = output.join "\n"
-
-        max_length = output.split("\n").map{|l| l.strip.size }.max
-        term_width = `tput cols`.to_i - 1
-        term_width = max_length if term_width < 0
-        max_length = [term_width, max_length].min
-        output.gsub! /^(=====.{15})/, "\\1#{'='*(max_length - 20)}"
         
         puts output
       # ------------------------------------------------------------------------
@@ -571,20 +559,26 @@ class DockerSwarm
     
     def gzip_read(fname) = Zlib::GzipReader.open(fname){|gz| gz.read }
 
-    def csv2table(content, sep1: "\t", sep2: '  ', header: [])
+    def csv2table(content, sep1: "\t", sep2: '  ', header: [], tag: nil)
       if ENV['DOCKER_REGISTRY']
         path = File.dirname(ENV['DOCKER_REGISTRY'])
         content.gsub! path, '®'
       end
 
       rows = content.split("\n").map{|l| l.split sep1 }
-      rows.unshift header.map{|h| "[#{h}]" }
+      rows.unshift header.map.with_index{|h,i| "[#{h}]#{' '+tag if i == 0 && tag}" }
       num_columns = rows.map{|r| r.size }.max
       max_length = num_columns.times.map do |i|
         rows.map{|r| r[i].to_s.size }.max
       end
 
-      rows.map{|r| r.map.with_index{|c,i| c.ljust max_length[i] }.join(sep2) }
+      rows = rows.map{|r| r.map.with_index{|c,i| c.ljust max_length[i] } }
+
+      rows[0].each_with_index do |c,i|
+        c.sub!(/^([^ ]+) {0,1}([^ ]+)*( +)*/){ "\033[0;30;46m#{$1}\033[0m \033[4;30;44m#{$2}\033[0m#{$3}" }
+      end
+
+      rows.map{|r| r.join(sep2) }
     end # csv2table
 end # class DockerSwarm
 
