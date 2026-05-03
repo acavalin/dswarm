@@ -2,7 +2,7 @@
 class DockerSwarm
   %w[ yaml shellwords open3 zlib ].each{|lib| require lib }
 
-  VERSION             = '1.7.2'
+  VERSION             = '2.2.0'
   CMD                 = File.basename __FILE__
   DEFAULT_CMD_ARGS    = 'bash -il'
   DEFAULT_DOCKER_ARGS = ''
@@ -11,11 +11,12 @@ class DockerSwarm
     'context'  => %w[ c ],
     'ssh'      => %w[   ],
     'ls'       => %w[   ],
-    'services' => %w[ s ],
+    'services' => %w[ lss ],
     'inspect'  => %w[ i ],
     'logs'     => %w[ l ],
     'restart'  => %w[ r ],
     'update'   => %w[ u ],
+    'scale'    => %w[ s ],
     'top'      => %w[ t ],
     'dtop'     => %w[   ],
     'exec'     => %w[ e ],
@@ -28,7 +29,8 @@ class DockerSwarm
     'pull'     => %w[ p ],
     'deploy'   => %w[ d ],
     'login'    => %w[   ],
-    'images'   => %w[ lsi   ],
+    'images'   => %w[ lsi ],
+    'rm-image' => %w[ rmi ],
     'clean'    => %w[ clear ],
   }
 
@@ -40,6 +42,7 @@ class DockerSwarm
     @conf_path = nil
     @cmd       = get_cmd_alias @argv.shift
     @is_quiet  = get_flag %w[ -q --quiet ]
+    @image_config = {}
 
     # autoload environment from `.dockerswarm` YAML config file
     dir = File.expand_path Dir.pwd
@@ -48,6 +51,8 @@ class DockerSwarm
       env = YAML.unsafe_load_file conf_path rescue nil
 
       if env.is_a?(Hash)
+        @image_config = env.delete('build_config') || {}
+
         unless @is_quiet
           print "⬡ #{@cmd || :help}   "
           env.each do |k, v|
@@ -55,6 +60,7 @@ class DockerSwarm
             print "⬢ #{k.sub 'DOCKER_', ''} #{v}   "
           end; puts ''
         end
+
         @conf_path, @env = conf_path, env
         break
       else
@@ -73,7 +79,7 @@ class DockerSwarm
       # ------------------------------------------------------------------------
       when 'context' # https://docs.docker.com/engine/manage-resources/contexts/
         case @argv[0]
-          when 'ls' then exec "docker context ls"
+          when 'ls' then pexec "docker context ls"
           when 'add'
             die "missing arguments" if @argv.size < 3
             pexec %Q|docker context create #{@argv[1].shellescape} --docker host=ssh://#{@argv[2].shellescape}|
@@ -189,6 +195,16 @@ class DockerSwarm
           die "no service or image found"
         end
       # ------------------------------------------------------------------------
+      when 'scale'
+        is_forced = get_flag %w[ -f --force ]
+
+        unless is_forced
+          print "Scale `#{service_name}` to `#{@argv[1].to_i}` instances? [y|N] "
+          exit if STDIN.gets.strip != 'y'
+        end
+
+        pexec "docker service scale #{service_name}=#{@argv[1].to_i}"
+      # ------------------------------------------------------------------------
       when 'top'
         id = container_id
         pexec "docker top #{id}" if id
@@ -292,6 +308,10 @@ class DockerSwarm
         puts ENV['DOCKER_REGISTRY'] \
           ? lines.select{|l| l.include? ENV['DOCKER_REGISTRY'] }
           : lines
+      # ------------------------------------------------------------------------
+      when 'rm-image'
+        images = @argv.map{|i| i.shellescape }.join ' '
+        pexec "docker image rm #{images}"
       # ------------------------------------------------------------------------
       when 'build'
         name, tag = @argv[0].to_s.chomp(File::SEPARATOR).split(':')
@@ -414,7 +434,7 @@ class DockerSwarm
             ls               [-s|--simple]
             ps               [stack-name] [-c|--containers] [-s|--stats]
             rm               [stack-name] [-f|--force]
-            <s|services>     [-f|--full]
+            <lss|services>   [-f|--full]
             dtop             # interactive log viewer | https://github.com/amir20/dtop
 
           ### SERVICE actions
@@ -422,12 +442,14 @@ class DockerSwarm
             <l|logs>         <service-id> [-f|--follow] [-s|--save]
             <r|restart>      <service-id>
             <u|update>       <service-id> [image-tag]
+            <s|scale>        <service-id> <num_instances> [-f]
             <t|top>          <service-id>[.replica]
             <e|exec>         <service-id>[.replica] [command [args]] [-- docker-args]
 
           ### IMAGE actions
             login            # interactive login to DOCKER_REGISTRY
             <lsi|images>
+            <rmi|rm-image>   <image-name:tag> [<image-name:tag> ...]
             <b|build>        <image-name>[:tag] [build-folder]
             <P|push>         <image-name>[:tag] [image-name[:tag] ...]
             <p|pull>         [<image-name>[:tag]]
@@ -529,21 +551,27 @@ class DockerSwarm
 
     def parse_image_config(path = 'dswarm.yml')
       cfg = YAML.unsafe_load_file(path) rescue {}
+      cfg = @image_config.merge cfg
       res = cfg.slice 'pre_cmd', 'post_cmd'
+      
+      def subst_dir(s) = s.gsub('_FOLDER_', File.basename(Dir.pwd))
+      
+      res['pre_cmd' ] = subst_dir(res['pre_cmd' ]) if res['pre_cmd' ]
+      res['post_cmd'] = subst_dir(res['post_cmd']) if res['post_cmd']
 
       res['context'] = cfg['context'] || '.'
-      res['context'] = %x[#{cfg['context'][2..]}].strip if cfg['context'].to_s.start_with?('$ ')
+      res['context'] = %x[#{subst_dir cfg['context'][2..]}].strip if cfg['context'].to_s.start_with?('$ ')
 
       res['file'] = cfg['file']
-      res['file'] = %x[#{cfg['file'][2..]}].strip if cfg['file'].to_s.start_with?('$ ')
+      res['file'] = %x[#{subst_dir cfg['file'][2..]}].strip if cfg['file'].to_s.start_with?('$ ')
 
       res['tags'] = cfg['tags'].to_a.map do |t|
-        t.start_with?('$ ') ? %x[#{t[2..]}].strip : t
+        t.start_with?('$ ') ? %x[#{subst_dir t[2..]}].strip : t
       end
 
       res['build-args'] = cfg['build-args'].to_a.inject({}) do |h, i|
         name, cmd = i.first
-        cmd = %x[#{cmd[2..]}].strip if cmd.to_s.start_with?('$ ')
+        cmd = %x[#{subst_dir cmd[2..]}].strip if cmd.to_s.start_with?('$ ')
         h.merge! name => cmd
       end
 

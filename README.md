@@ -26,11 +26,12 @@ USAGE: dswarm <action> [params]
   ls               [-s|--simple]
   ps               [stack-name] [-c|--containers] [-s|--stats]
   rm               [stack-name] [-f|--force]
-  <s|services>     [-f|--full]
+  <lss|services>   [-f|--full]
   <i|inspect>      <service-id> [-p|--pretty]
   <l|logs>         <service-id> [-f|--follow]
   <r|restart>      <service-id>
   <u|update>       <service-id> [image-tag]
+  <s|scale>        <service-id> <num_instances> [-f]
   <t|top>          <service-id>[.replica]
   <e|exec>         <service-id>[.replica] [command [args]] [-- docker-args]
 ~~~
@@ -48,7 +49,7 @@ passing the argument `pre`/`post` respectively before and after the deploy proce
   run              <image-id>   [command [args]] [-- docker-args]
 ~~~
 
-Note: The `build` action can read optional (`docker image build`) parameters from
+The `build` action can read optional (`docker image build`) parameters from
 a `dswarm.yml` file within the `[build-folder]`:
 
 ~~~yaml
@@ -58,7 +59,7 @@ file: path_to_Dockerfile
 
 tags:
 - app:latest
-- $ echo "app:`date +%Y%m%d`-`git rev-parse --short HEAD`"
+- $ echo "_FOLDER_:`date +%Y%m%d`-`git rev-parse --short HEAD`"
 
 build-args:
 - NODE_VERSION: xx.yy
@@ -69,7 +70,19 @@ pre_cmd:  echo BEGIN_BUILD
 post_cmd: echo END_BUILD
 ~~~
 
-any string starting with `$ ` will be replaced by the output of its trailing shell command.
+any string starting with `$ ` will be replaced by the output of its trailing shell command,
+the `_FOLDER_` string will be replaced by the `[build-folder]` name.
+
+Default options for all images can be placed in the `build_config` key within
+`.dockerswarm` file, eg:
+
+~~~yaml
+build_config:
+  tags:
+  - $ echo "_FOLDER_:`date --utc +%Y-%m-%d_%H-%m`_`git rev-parse --short HEAD`"
+  pre_cmd:  echo BUILDING _FOLDER_
+  post_cmd: echo FINISHED _FOLDER_
+~~~
 
 ### 2.3 Actions for managing contexts
 ~~~
