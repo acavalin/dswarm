@@ -2,13 +2,14 @@
 class DockerSwarm
   %w[ yaml shellwords open3 zlib ].each{|lib| require lib }
 
-  VERSION             = '2.2.1'
+  VERSION             = '2.3.0'
   CMD                 = File.basename __FILE__
   DEFAULT_CMD_ARGS    = 'bash -il'
   DEFAULT_DOCKER_ARGS = ''
 
   CMD_ALIASES = {
     'context'  => %w[ c ],
+    'node'     => %w[ n ],
     'ssh'      => %w[   ],
     'ls'       => %w[   ],
     'services' => %w[ lss ],
@@ -58,7 +59,7 @@ class DockerSwarm
           env.each do |k, v|
             ENV[k] = v.to_s
             print "⬢ #{k.sub 'DOCKER_', ''} #{v}   "
-          end; puts ''
+          end; puts "(v.#{VERSION})"
         end
 
         @conf_path, @env = conf_path, env
@@ -119,6 +120,19 @@ class DockerSwarm
                 puts %Q|unset  DOCKER_CONTEXT|
                 puts %Q|# eval $(#{CMD} context unset --quiet)|
             end
+          else
+            die "no subcommand given"
+        end
+      # ------------------------------------------------------------------------
+      when 'node'
+        case @argv[0]
+          when 'ls' then pexec "docker node ls"
+          when 'drain'
+            die "no active node found" unless node = @argv[1] || first_node('Active')
+            pexec "docker node update --availability drain #{node.shellescape}"
+          when 'fill'
+            die "no drained node found" unless node = @argv[1] || first_node('Drain')
+            pexec "docker node update --availability active #{node.shellescape}"
           else
             die "no subcommand given"
         end
@@ -465,6 +479,11 @@ class DockerSwarm
             <c|context>      unset              [sh|fish|cmd|powershell]
             ssh              [remote-command]
 
+          ### NODE actions
+            <n|node>         ls
+            <n|node>         drain [node-name]  # default: first Active node
+            <n|node>         fill  [node-name]  # default: first Drain node
+
           ### `.dockerswarm` YAML keys
             DOCKER_CONTEXT   context name / target machine
             DOCKER_STACK     stack name   / service-id prefix
@@ -516,6 +535,13 @@ class DockerSwarm
     end # container_id
 
     def service_name(name=nil) = [ENV['DOCKER_STACK'   ], name || @argv.first || :no_service].compact.join('_')
+
+    def first_node(availability)
+      `docker node ls --format '{{.Hostname}}|{{.Availability}}'`.
+        split("\n").
+        detect{|l| l.split('|').last.to_s.downcase == availability.downcase }.
+        to_s.split('|').first
+    end # first_node
 
     def image_name(name=nil)   = [ENV['DOCKER_REGISTRY'], name || @argv.first || :no_image].compact.join('/')
 

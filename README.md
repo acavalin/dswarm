@@ -1,5 +1,5 @@
 # dswarm
-A script to easily manage docker stacks, services, images, contexts and repositories.
+A script to easily manage docker stacks, services, images, contexts, nodes and repositories.
 
 ## 1. Configuration
 This terminal script can operate on your swarms by reading environment variables
@@ -98,6 +98,17 @@ Note: Contexts will be created using by default the SSH adapter but you can alwa
 use `docker context create` to create your own, however keep in mind that the `ssh`
 action will not work when using a different adapter.
 
+### 2.4 Actions for managing nodes
+~~~
+  <n|node>         ls
+  <n|node>         drain [node-name]
+  <n|node>         fill  [node-name]
+~~~
+
+Note: when `[node-name]` is omitted, `drain` acts on the first node with
+availability `Active`, while `fill` acts on the first node with availability
+`Drain`.
+
 ## 3. Examples
 
 ~~~shell
@@ -133,6 +144,17 @@ dswarm ps --stats
 # open a bash shell in the first container running the `myapp` image
 # applying some docker options too (change process user)
 dswarm exec myapp -- -u smith
+
+# list swarm nodes
+dswarm node ls
+
+# drain the first active node, or a specific one
+dswarm node drain
+dswarm node drain node-2
+
+# activate the first drained node, or a specific one
+dswarm node fill
+dswarm node fill node-2
 
 # remove the `awesomeapp` stack
 dswarm rm
